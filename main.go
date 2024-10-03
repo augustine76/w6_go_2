@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"sync"
 )
 
@@ -39,6 +40,25 @@ func createTask(w http.ResponseWriter, r *http.Request) {
 func getAllTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tasks)
+}
+
+func getTaskByID(w http.ResponseWriter, r *http.Request) {
+	idStr := r.URL.Path[len("/tasks/"):]
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid task ID", http.StatusBadRequest)
+		return
+	}
+
+	for _, task := range tasks {
+		if task.ID == id {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(task)
+			return
+		}
+	}
+
+	http.Error(w, "Task not found", http.StatusNotFound)
 }
 
 func main() {
