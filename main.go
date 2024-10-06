@@ -3,88 +3,115 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
-	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 )
 
-type Task struct {
-	ID          int    `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Status      string `json:"status"` // "pending" or "completed"
+type Assignment struct {
+	ID             string    `json:"id"`
+	CourseName     string    `json:"course_name"`
+	CourseCode     string    `json:"course_code"`
+	AssignmentWeek int       `json:"assignment_week"`
+	AssignmentDue  time.Time `json:"assignment_due"`
 }
 
-var (
-	tasks  = []Task{}
-	nextID = 1
-	mu     sync.Mutex
-)
+var assignments = make(map[string]Assignment)
 
-func createTask(w http.ResponseWriter, r *http.Request) {
-	var task Task
-	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+func calculateHoursLeft(due time.Time) float64 {
+	duration := time.Until(due)
+	return duration.Hours()
+}
+
+func createAssignment(w http.ResponseWriter, r *http.Request) {
+	var assignment Assignment
+	if err := json.NewDecoder(r.Body).Decode(&assignment); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	mu.Lock()
-	task.ID = nextID
-	nextID++
-	tasks = append(tasks, task)
-	mu.Unlock()
-
+	assignment.ID = uuid.New().String()
+	assignments[assignment.ID] = assignment
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(task)
+	json.NewEncoder(w).Encode(assignment)
 }
 
-func getAllTasks(w http.ResponseWriter, r *http.Request) {
+func getAssignments(w http.ResponseWriter, r *http.Request) {
+	var list []map[string]interface{}
+	for _, assignment := range assignments {
+		assignmentData := map[string]interface{}{
+			"id":              assignment.ID,
+			"course_name":     assignment.CourseName,
+			"course_code":     assignment.CourseCode,
+			"assignment_week": assignment.AssignmentWeek,
+			"assignment_due":  assignment.AssignmentDue,
+			"hours_left":      calculateHoursLeft(assignment.AssignmentDue),
+		}
+		list = append(list, assignmentData)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tasks)
+	json.NewEncoder(w).Encode(list)
 }
 
-func getTaskByID(w http.ResponseWriter, r *http.Request) {
-	idStr := r.URL.Path[len("/tasks/"):]
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		http.Error(w, "Invalid task ID", http.StatusBadRequest)
+func getAssignment(w http.ResponseWriter, r *http.Request) {
+	params := mux.Vars(r)
+	assignment, exists := assignments[params["id"]]
+	if !exists {
+		http.Error(w, "Assignment not found", http.StatusNotFound)
 		return
 	}
 
-	for _, task := range tasks {
-		if task.ID == id {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(task)
-			return
-		}
+	assignmentData := map[string]interface{}{
+		"id":              assignment.ID,
+		"course_name":     assignment.CourseName,
+		"course_code":     assignment.CourseCode,
+		"assignment_week": assignment.AssignmentWeek,
+		"assignment_due":  assignment.AssignmentDue,
+		"hours_left":      calculateHoursLeft(assignment.AssignmentDue),
 	}
 
-	http.Error(w, "Task not found", http.StatusNotFound)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(assignmentData)
+}
+
+func updateAssignment(w http.ResponseWriter, r *http.Request) {
+	params := mux.Vars(r)
+	_, exists := assignments[params["id"]]
+	if !exists {
+		http.Error(w, "Assignment not found", http.StatusNotFound)
+		return
+	}
+
+	var updated Assignment
+	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	updated.ID = params["id"]
+	assignments[params["id"]] = updated
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(updated)
+}
+
+func deleteAssignment(w http.ResponseWriter, r *http.Request) {
+	params := mux.Vars(r)
+	_, exists := assignments[params["id"]]
+	if !exists {
+		http.Error(w, "Assignment not found", http.StatusNotFound)
+		return
+	}
+	delete(assignments, params["id"])
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func main() {
-	http.HandleFunc("/tasks", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			getAllTasks(w, r)
-		case http.MethodPost:
-			createTask(w, r)
-		default:
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
+	router := mux.NewRouter()
 
-	// http.HandleFunc("/tasks/", func(w http.ResponseWriter, r *http.Request) {
-	//     switch r.Method {
-	//     case http.MethodGet:
-	//         getTaskByID(w, r)
-	//     case http.MethodPut:
-	//         updateTask(w, r)
-	//     case http.MethodDelete:
-	//         deleteTask(w, r)
-	//     default:
-	//         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	//     }
-	// })
+	router.HandleFunc("/assignments", createAssignment).Methods("POST")
+	router.HandleFunc("/assignments", getAssignments).Methods("GET")
+	router.HandleFunc("/assignments/{id}", getAssignment).Methods("GET")
+	router.HandleFunc("/assignments/{id}", updateAssignment).Methods("PUT")
+	router.HandleFunc("/assignments/{id}", deleteAssignment).Methods("DELETE")
 
-	http.ListenAndServe(":8080", nil)
+	http.ListenAndServe(":8080", router)
 }
